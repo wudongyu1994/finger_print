@@ -1,6 +1,9 @@
 #include "finger.h"
 #include "as608.h"
 #include "delay.h"
+#include "exti.h"
+
+extern bool flagFP;
 
 void ShowErrMessage(u8 ensure)
 {
@@ -10,11 +13,24 @@ void ShowErrMessage(u8 ensure)
 };
 extern u16 ValidN;	
 extern SysPara AS608Para;
-extern bool flagFhave;	
-//录指纹
-void Add_FR(void)
+
+//外部中断屏蔽设置
+//en:true，开启;false，关闭;  
+void EXTI_Set(u8 n,bool en)
+{
+    EXTI->PR=1<<n;  //清除LINEN上的中断标志位
+    if(en)EXTI->IMR|=1<<n;//不屏蔽lineN上的中断
+    else EXTI->IMR&=~(1<<n);//屏蔽lineN上的中断   
+}
+/*########################################################################
+函数名：	bool Add_FR(void)
+函数功能：	录入指纹，调用即可添加指纹，
+返回值：	bool类，true--成功添加指纹；false--添加指纹失败
+##########################################################################*/
+bool Add_FR(void)
 {
 	u8 i=0,ensure ,processnum=0;
+	bool isAddOk=false;
 	while(1)
 	{
 		switch (processnum)
@@ -114,42 +130,85 @@ void Add_FR(void)
 					printf("store ok\n");
 					printf("there is %d fingers\n",ValidN);
 					#endif
+					isAddOk=true;
 //					delay_ms(1500);
-					return ;
+					return isAddOk;
 				}else {processnum=0;ShowErrMessage(ensure);}					
 				break;				
 		}
 		delay_ms(400);
 		if(i==5)//超过5次没有按手指则退出
-			break;	
+			return isAddOk;	
 	}
 }
 
-//刷指纹
-void press_FR(void)
+
+/*########################################################################
+函数名：	void press_FR(void)
+函数功能：	识别指纹1次
+返回值：	bool类，true--成功搜索到该指纹；false--搜索指纹失败
+##########################################################################*/
+bool press_FR(SearchResult *seach)
 {
-	SearchResult seach;
 	u8 ensure;
-	char *str;
+	
 	ensure=PS_GetImage();
 	if(ensure==0x00)//获取图像成功 
 	{	
 		ensure=PS_GenChar(CharBuffer1);
 		if(ensure==0x00) //生成特征成功
 		{		
-			ensure=PS_HighSpeedSearch(CharBuffer1,0,AS608Para.PS_max,&seach);
+			ensure=PS_HighSpeedSearch(CharBuffer1,0,AS608Para.PS_max,seach);
 			if(ensure==0x00)//搜索成功
 			{	
-				flagFhave=true;
-				printf("finger exist!#ID=%d--score=%d",seach.pageID,seach.mathscore);
+				return true;
 			}
 			else 
-				ShowErrMessage(ensure);					
-	  }
+			{
+				ShowErrMessage(ensure);		
+				return false;
+			}				
+		}
 		else
+		{
 			ShowErrMessage(ensure);
-	 delay_ms(600);
+			return false;
+		}
 	}
-		
+	else
+	{
+		ShowErrMessage(ensure);
+		return false;
+	}
+	
 }
 
+/*########################################################################
+函数名：	bool checkFinger(void)
+函数功能：	识别指纹n=3次，调用即可判断是否存在该指纹，
+返回值：	bool类，true--成功搜索到该指纹；false--搜索指纹失败
+##########################################################################*/
+bool checkFinger(SearchResult *search)
+{
+	u8 i;
+	
+	while(!flagFP);
+	EXTI_Set(0,false);	//关闭Line0中断
+	for(i=0;i<3;i++)
+	{
+		if(!GPIO_ReadInputDataBit(GPIOB,GPIO_Pin_0))
+			break;
+		if(press_FR(search))
+		{
+			EXTI_Set(0,true);	//开启Line0中断
+			flagFP=false;
+			return true;
+		}
+		else
+			printf("##please try again!\n");
+//		delay_ms(100);
+	}
+	EXTI_Set(0,true);	//开启Line0中断
+	flagFP=false;
+	return false;
+}
